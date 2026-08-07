@@ -31,7 +31,7 @@ RESELLER_URLS = [
     "https://casiostore.bhawar.com/products/mtp-b195d-1a",
     "https://casiostore.bhawar.com/products/mtp-b195l-1a",
 ]
-SOLD_OUT_PHRASE = "Sold out"
+SOLD_OUT_PHRASE = "XXXTestXXX"
 
 # Official Casio pages - no plain stock text, fall back to full-page diff
 OFFICIAL_URLS = [
