@@ -1,17 +1,19 @@
 """
 Casio watch stock/availability checker.
 
-Watches one or more Casio product pages for ANY change on the page
-(since Casio doesn't show a plain "Out of Stock" text label in the
-raw HTML - the buy button state is likely set by client-side JS).
-On the first run for a URL it just records a baseline. On every
-run after that, if the page content differs from last time, it
-sends you a free push notification via ntfy.sh with the link.
+Two kinds of URLs are watched, checked differently:
 
-Because this watches for "any change," it may occasionally notify
-you about something unrelated (a banner update, price text, etc).
-That's a deliberate trade-off: it's better to get one extra ping
-than to silently miss a real restock. Open the link and check.
+1. RESELLER_URLS (casiostore.bhawar.com) - these print the literal
+   text "Sold out" in the page HTML when unavailable. We check for
+   that exact phrase disappearing - a precise, low-false-alarm signal.
+
+2. OFFICIAL_URLS (casio.com) - these don't show plain stock text in
+   the raw HTML (likely set by client-side JS), so we fall back to
+   hashing the whole page and flagging ANY change. Noisier, but
+   won't silently miss a real restock.
+
+Either way, on a real signal it sends a free push notification via
+ntfy.sh with the link straight to your phone.
 """
 
 import hashlib
@@ -24,8 +26,15 @@ import requests
 
 STATE_FILE = "state.json"
 
-# Add/remove watch URLs here
-URLS = [
+# Reseller pages - explicit "Sold out" text, precise signal
+RESELLER_URLS = [
+    "https://casiostore.bhawar.com/products/mtp-b195d-1a",
+    "https://casiostore.bhawar.com/products/mtp-b195l-1a",
+]
+SOLD_OUT_PHRASE = "Sold out"
+
+# Official Casio pages - no plain stock text, fall back to full-page diff
+OFFICIAL_URLS = [
     "https://www.casio.com/in/watches/casio/product.MTP-B195D-1AV/",
     "https://www.casio.com/in/watches/casio/product.MTP-B195L-1AV/",
 ]
@@ -45,28 +54,78 @@ HEADERS = {
 }
 
 
-def fetch_hash(url: str) -> str:
+def fetch_page(url: str) -> str:
     resp = requests.get(url, headers=HEADERS, timeout=20)
     resp.raise_for_status()
-    return hashlib.sha256(resp.text.encode("utf-8")).hexdigest()
+    return resp.text
 
 
-def notify(url: str) -> None:
+def notify(url: str, reason: str) -> None:
     if not NTFY_TOPIC:
         print("NTFY_TOPIC not set - skipping notification, just logging.")
-        print(f"CHANGE DETECTED: {url}")
+        print(f"ALERT ({reason}): {url}")
         return
-    msg = f"Casio watch page changed - check stock:\n{url}".encode("utf-8")
+    msg = f"{reason}\n{url}".encode("utf-8")
     req = urllib.request.Request(
         f"https://ntfy.sh/{NTFY_TOPIC}",
         data=msg,
         headers={
-            "Title": "Casio watch page changed",
+            "Title": "Casio watch may be back in stock!",
             "Priority": "urgent",
-            "Tags": "watch",
+            "Tags": "watch,rotating_light",
         },
     )
     urllib.request.urlopen(req, timeout=10)
+
+
+def check_reseller_url(url: str, state: dict) -> bool:
+    """Returns True if this run detected a real restock signal."""
+    try:
+        html = fetch_page(url)
+    except Exception as e:
+        print(f"Error fetching {url}: {e}", file=sys.stderr)
+        return False
+
+    is_sold_out_now = SOLD_OUT_PHRASE in html
+    was_sold_out_before = state.get(url)  # True/False/None(first run)
+
+    if was_sold_out_before is None:
+        print(f"First run for {url} - currently {'SOLD OUT' if is_sold_out_now else 'IN STOCK'}.")
+    elif was_sold_out_before and not is_sold_out_now:
+        print(f"RESTOCK DETECTED: {url}")
+        notify(url, "Back in stock on Bhawar Casio store!")
+        state[url] = is_sold_out_now
+        return True
+    else:
+        print(f"No change ({'sold out' if is_sold_out_now else 'in stock'}): {url}")
+
+    state[url] = is_sold_out_now
+    return False
+
+
+def check_official_url(url: str, state: dict) -> bool:
+    """Full-page-diff fallback for pages with no plain stock text."""
+    try:
+        html = fetch_page(url)
+    except Exception as e:
+        print(f"Error fetching {url}: {e}", file=sys.stderr)
+        return False
+
+    current_hash = hashlib.sha256(html.encode("utf-8")).hexdigest()
+    previous_hash = state.get(url)
+
+    if previous_hash is None:
+        print(f"First run for {url} - recording baseline.")
+    elif previous_hash != current_hash:
+        print(f"CHANGE DETECTED: {url}")
+        notify(url, "Official Casio page changed - check stock")
+        state[url] = current_hash
+        return True
+    else:
+        print(f"No change: {url}")
+
+    state[url] = current_hash
+    return False
 
 
 def main() -> None:
@@ -76,30 +135,18 @@ def main() -> None:
             state = json.load(f)
 
     changed_any = False
-    for url in URLS:
-        try:
-            current_hash = fetch_hash(url)
-        except Exception as e:
-            print(f"Error fetching {url}: {e}", file=sys.stderr)
-            continue
-
-        previous_hash = state.get(url)
-        if previous_hash is None:
-            print(f"First run for {url} - recording baseline.")
-        elif previous_hash != current_hash:
-            print(f"CHANGE DETECTED: {url}")
-            notify(url)
+    for url in RESELLER_URLS:
+        if check_reseller_url(url, state):
             changed_any = True
-        else:
-            print(f"No change: {url}")
-
-        state[url] = current_hash
+    for url in OFFICIAL_URLS:
+        if check_official_url(url, state):
+            changed_any = True
 
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
     if changed_any:
-        print("At least one page changed this run.")
+        print("At least one restock/change detected this run.")
 
 
 if __name__ == "__main__":
