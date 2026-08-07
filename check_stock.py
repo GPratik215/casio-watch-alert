@@ -31,7 +31,7 @@ RESELLER_URLS = [
     "https://casiostore.bhawar.com/products/mtp-b195d-1a",
     "https://casiostore.bhawar.com/products/mtp-b195l-1a",
 ]
-SOLD_OUT_PHRASE = "XXXTestXXX"
+SOLD_OUT_PHRASE = "Sold out"
 
 # Official Casio pages - no plain stock text, fall back to full-page diff
 OFFICIAL_URLS = [
@@ -137,9 +137,13 @@ def check_official_url(url: str, state: dict) -> bool:
 
 def main() -> None:
     state = {}
-    if os.path.exists(STATE_FILE):
+    if os.path.exists(STATE_FILE) and os.path.getsize(STATE_FILE) > 0:
         with open(STATE_FILE) as f:
-            state = json.load(f)
+            try:
+                state = json.load(f)
+            except json.JSONDecodeError:
+                print(f"Warning: {STATE_FILE} was empty/invalid - starting fresh.", file=sys.stderr)
+                state = {}
 
     changed_any = False
     for url in RESELLER_URLS:
