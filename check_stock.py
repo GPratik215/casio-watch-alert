@@ -31,7 +31,7 @@ RESELLER_URLS = [
     "https://casiostore.bhawar.com/products/mtp-b195d-1a",
     "https://casiostore.bhawar.com/products/mtp-b195l-1a",
 ]
-SOLD_OUT_PHRASE = "XXXSoldOutTestXXX"
+SOLD_OUT_PHRASE = "XXXTestXXX"
 
 # Official Casio pages - no plain stock text, fall back to full-page diff
 OFFICIAL_URLS = [
@@ -65,6 +65,7 @@ def notify(url: str, reason: str) -> None:
         print("NTFY_TOPIC not set - skipping notification, just logging.")
         print(f"ALERT ({reason}): {url}")
         return
+    print(f"Attempting ntfy push to topic: '{NTFY_TOPIC}' (len={len(NTFY_TOPIC)})")
     msg = f"{reason}\n{url}".encode("utf-8")
     req = urllib.request.Request(
         f"https://ntfy.sh/{NTFY_TOPIC}",
@@ -75,7 +76,13 @@ def notify(url: str, reason: str) -> None:
             "Tags": "watch,rotating_light",
         },
     )
-    urllib.request.urlopen(req, timeout=10)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"ntfy response status: {resp.status}")
+            print(f"ntfy response body: {resp.read().decode('utf-8', errors='replace')}")
+    except Exception as e:
+        print(f"ntfy request FAILED: {type(e).__name__}: {e}", file=sys.stderr)
+        raise
 
 
 def check_reseller_url(url: str, state: dict) -> bool:
